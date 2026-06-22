@@ -1,7 +1,9 @@
 import requests
 import pandas as pd
 import numpy as np
+import streamlit as st
 
+@st.cache_data(ttl=300)
 def fetch_real_data(stock_code, start_date, end_date, max_retries=3):
     """
     用新浪财经接口获取真实历史K线数据
@@ -80,3 +82,46 @@ def get_stock_data(stock_code, start_date, end_date):
     else:
         mock_df = generate_mock_data(start_date, end_date)
         return mock_df, "mock", msg
+
+
+def backtest_macd_strategy(df, initial_capital=10000):
+    """
+    简单MACD金叉死叉策略回测
+    金叉（MACD_diff由负转正）时买入，死叉（由正转负）时卖出
+    """
+    df = df.copy()
+    df["signal"] = 0
+    df.loc[df["MACD_diff"] > 0, "signal"] = 1
+    df.loc[df["MACD_diff"] <= 0, "signal"] = 0
+
+    # 找出信号变化的时刻（即金叉死叉发生的那一天）
+    df["position_change"] = df["signal"].diff()
+
+    cash = initial_capital
+    shares = 0
+    trades = []
+
+    for date, row in df.iterrows():
+        if row["position_change"] == 1:  # 金叉，买入
+            shares = cash / row["Close"]
+            cash = 0
+            trades.append({"日期": date.strftime("%Y-%m-%d"), "操作": "买入", "价格": round(row["Close"], 2)})
+        elif row["position_change"] == -1 and shares > 0:  # 死叉，卖出
+            cash = shares * row["Close"]
+            shares = 0
+            trades.append({"日期": date.strftime("%Y-%m-%d"), "操作": "卖出", "价格": round(row["Close"], 2)})
+
+    # 计算最终资产（如果还持有股票，按最后一天价格估算）
+    final_value = cash + shares * df["Close"].iloc[-1]
+    strategy_return = (final_value - initial_capital) / initial_capital * 100
+
+    # 对比：什么都不做，从头持有到尾
+    buy_hold_return = (df["Close"].iloc[-1] - df["Close"].iloc[0]) / df["Close"].iloc[0] * 100
+
+    return {
+        "策略最终资产": round(final_value, 2),
+        "策略收益率": round(strategy_return, 2),
+        "买入持有收益率": round(buy_hold_return, 2),
+        "交易次数": len(trades),
+        "交易记录": trades
+    }
